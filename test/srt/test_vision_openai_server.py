@@ -32,8 +32,6 @@ class TestOpenAIVisionServer(unittest.TestCase):
             other_args=[
                 "--chat-template",
                 "chatml-llava",
-                "--chunked-prefill-size",
-                "16384",
                 # "--log-requests",
             ],
         )
@@ -114,8 +112,8 @@ class TestOpenAIVisionServer(unittest.TestCase):
         text = response.choices[0].message.content
         assert isinstance(text, str)
         print(text)
-        assert "man" in text or "cab" in text, text
-        # assert "logo" in text, text
+        assert "man" in text and "taxi" in text, text
+        assert "logo" in text, text
         assert response.id
         assert response.created
         assert response.usage.prompt_tokens > 0

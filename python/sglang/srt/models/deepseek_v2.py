@@ -45,6 +45,7 @@ from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessor
 from sglang.srt.layers.radix_attention import RadixAttention
+from sglang.srt.layers.sampler import Sampler
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import InputMetadata
 
@@ -416,12 +417,8 @@ class DeepseekV2AttentionMLA(nn.Module):
             v_head_dim=self.kv_lora_rank,
         )
 
-        kv_b_proj = self.kv_b_proj
-        w_kc, w_vc = kv_b_proj.weight.unflatten(
-            0, (-1, qk_nope_head_dim + v_head_dim)
-        ).split([qk_nope_head_dim, v_head_dim], dim=1)
-        self.w_kc = w_kc
-        self.w_vc = w_vc
+        self.w_kc = None
+        self.w_vc = None
 
     def forward(
         self,
@@ -463,7 +460,7 @@ class DeepseekV2AttentionMLA(nn.Module):
         )
         torch.bmm(
             attn_output.transpose(0, 1),
-            self.w_vc.transpose(1, 2).contiguous(),
+            self.w_vc,
             out=attn_bmm_output.transpose(0, 1),
         )
 
@@ -632,6 +629,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             config.vocab_size, config.hidden_size, quant_config=quant_config
         )
         self.logits_processor = LogitsProcessor(config)
+        self.sampler = Sampler()
 
     def forward(
         self,
@@ -640,9 +638,11 @@ class DeepseekV2ForCausalLM(nn.Module):
         input_metadata: InputMetadata,
     ) -> torch.Tensor:
         hidden_states = self.model(input_ids, positions, input_metadata)
-        return self.logits_processor(
+        logits_output = self.logits_processor(
             input_ids, hidden_states, self.lm_head.weight, input_metadata
         )
+        sample_output = self.sampler(logits_output, input_metadata.sampling_info)
+        return sample_output, logits_output
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         stacked_params_mapping = [
@@ -710,6 +710,16 @@ class DeepseekV2ForCausalLM(nn.Module):
                         param, "weight_loader", default_weight_loader
                     )
                     weight_loader(param, loaded_weight)
+
+        if global_server_args_dict["enable_mla"]:
+            for layer_id in range(self.config.num_hidden_layers):
+                self_attn = self.model.layers[layer_id].self_attn
+                w_kc, w_vc = self_attn.kv_b_proj.weight.unflatten(
+                    0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
+                ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
+                self_attn.w_kc = w_kc.contiguous()
+                self_attn.w_vc = w_vc.transpose(1, 2).contiguous()
+                del self_attn.kv_b_proj
 
 
 EntryClass = DeepseekV2ForCausalLM
