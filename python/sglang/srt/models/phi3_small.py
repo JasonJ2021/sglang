@@ -124,9 +124,9 @@ class Phi3SmallSelfAttention(nn.Module):
         assert (config.blocksparse_block_size ==
                 config.blocksparse_triton_kernel_block_size)
 
-        self.hidden_size = config.cross_attention_hidden_size
+        self.hidden_size = config.hidden_size
         # Number of Query Heads
-        self.num_heads = config.num_aattention_heads
+        self.num_heads = config.num_attention_heads
 
         self.head_dim = self.hidden_size // self.num_heads
         self.tp_size = get_tensor_model_parallel_world_size()
@@ -194,7 +194,7 @@ class Phi3SmallSelfAttention(nn.Module):
 
         use_dense_attn = (getattr(self.config,
                                   "dense_attention_every_n_layers", None)
-                          and (self.layer_idx + 1) %
+                          and (self.layer_id + 1) %
                           self.config.dense_attention_every_n_layers == 0)
 
         # TODO: support blocksparse attention in phi3 model
@@ -357,7 +357,7 @@ class Phi3SmallForCausalLM(nn.Module):
         )
         if self.config.tie_word_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
-        self.logits_processor = LogitsProcessor(config.vocab_size)
+        self.logits_processor = LogitsProcessor(config)
         self.sampler = Sampler()
 
         # tokens in tiktoken but not used
